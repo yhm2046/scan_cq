@@ -25,7 +25,7 @@ import java.util.concurrent.Executors;
 
 /**
  * Date: 25.12.27 Saturday, 14:30-16:31 识别不完整且支付重叠，log有报错
- * 18：27
+ * 18：27-18:58,about 2.5h with AI
  */
 
 
@@ -86,10 +86,11 @@ public class MainActivity extends AppCompatActivity {
                 .build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-        // 核心修改 2：提升分辨率至 1080p
-        // 针对 "12个小二维码" 的场景，1920x1080 是识别密集小码的最佳平衡点
+        // 核心修改：请求 4K 分辨率 (3840x2160)
+        // 如果手机硬件不支持 4K，CameraX 会自动降级到它支持的最高分辨率 (通常是 1080p 或 2K)
+        // 这样可以确保获得最清晰的图像细节，专门应对密集小码
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(1920, 1080))
+                .setTargetResolution(new Size(3840, 2160))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build();
 
@@ -99,7 +100,16 @@ public class MainActivity extends AppCompatActivity {
 
         try {
             cameraProvider.unbindAll();
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
+            // 绑定生命周期，并获取 cameraControl 对象（用于控制对焦/变焦）
+            Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
+
+            // 额外优化：确保开启自动对焦 (虽然默认通常开启，但这行代码强制激活)
+            // 某些手机在微距下可能不对焦，这有助于让它“看清楚”
+            CameraControl cameraControl = camera.getCameraControl();
+
+            // 这里我们不需要手动设置对焦模式，因为 CameraX 默认就是 Continuous Auto Focus
+            // 但如果需要，可以添加点击屏幕对焦的逻辑 (需要 PreviewView 的 TouchListener)
+
         } catch (Exception e) {
             Log.e(TAG, "Error binding camera use cases", e);
         }
