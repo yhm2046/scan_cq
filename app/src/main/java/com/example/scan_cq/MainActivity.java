@@ -63,6 +63,9 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Date: 25.12.27 Saturday, 14:30-16:31 识别不完整且支付重叠，log有报错
+ */
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "QRScanner";
     private static final int PERMISSION_REQUEST_CODE = 100;
