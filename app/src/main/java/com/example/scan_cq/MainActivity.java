@@ -1,11 +1,15 @@
 package com.example.scan_cq;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Size; // 务必保留这行，防止报错
+import android.widget.Toast;
+
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.*;
@@ -49,8 +53,15 @@ public class MainActivity extends AppCompatActivity {
 
         cameraExecutor = Executors.newSingleThreadExecutor();
 
+        // 设置点击监听
+        overlayView.setOnBarcodeClickListener(barcode -> {
+            String rawValue = barcode.getRawValue();
+            if (rawValue != null) {
+                handleBarcodeClick(rawValue, barcode.getValueType());
+            }
+        });
+
         // 核心修改 1：支持所有格式 (条形码 + 二维码)
-        // FORMAT_ALL_FORMATS 会同时检测 EAN-13, Code 128, QR Code 等
         BarcodeScannerOptions options = new BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
                 .build();
@@ -63,6 +74,26 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.CAMERA},
                     PERMISSION_REQUEST_CODE);
+        }
+    }
+
+    /**
+     * 处理点击事件：如果是URL则跳转，否则复制或弹窗提示
+     */
+    private void handleBarcodeClick(String rawValue, int valueType) {
+        // 方法1：简单判断是否以 http 开头
+        if (valueType == Barcode.TYPE_URL || rawValue.startsWith("http://") || rawValue.startsWith("https://")) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(rawValue));
+                startActivity(intent);
+                Toast.makeText(this, "正在打开链接...", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "无法打开该链接", Toast.LENGTH_SHORT).show();
+                Log.e(TAG, "Error opening URL", e);
+            }
+        } else {
+            // 如果不是链接，可以选择复制到剪贴板
+            Toast.makeText(this, "内容: " + rawValue, Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -86,9 +117,7 @@ public class MainActivity extends AppCompatActivity {
                 .build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-        // 核心修改：请求 4K 分辨率 (3840x2160)
-        // 如果手机硬件不支持 4K，CameraX 会自动降级到它支持的最高分辨率 (通常是 1080p 或 2K)
-        // 这样可以确保获得最清晰的图像细节，专门应对密集小码
+        // 请求 4K 分辨率
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                 .setTargetResolution(new Size(3840, 2160))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -100,16 +129,8 @@ public class MainActivity extends AppCompatActivity {
 
         try {
             cameraProvider.unbindAll();
-            // 绑定生命周期，并获取 cameraControl 对象（用于控制对焦/变焦）
             Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
-
-            // 额外优化：确保开启自动对焦 (虽然默认通常开启，但这行代码强制激活)
-            // 某些手机在微距下可能不对焦，这有助于让它“看清楚”
             CameraControl cameraControl = camera.getCameraControl();
-
-            // 这里我们不需要手动设置对焦模式，因为 CameraX 默认就是 Continuous Auto Focus
-            // 但如果需要，可以添加点击屏幕对焦的逻辑 (需要 PreviewView 的 TouchListener)
-
         } catch (Exception e) {
             Log.e(TAG, "Error binding camera use cases", e);
         }
@@ -122,7 +143,6 @@ public class MainActivity extends AppCompatActivity {
         if (mediaImage != null) {
             InputImage inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.getImageInfo().getRotationDegrees());
 
-            // 获取图像信息用于 Overlay 映射
             boolean isRotated = imageProxy.getImageInfo().getRotationDegrees() == 90 ||
                     imageProxy.getImageInfo().getRotationDegrees() == 270;
             int analysisWidth = isRotated ? imageProxy.getHeight() : imageProxy.getWidth();
@@ -130,16 +150,17 @@ public class MainActivity extends AppCompatActivity {
 
             barcodeScanner.process(inputImage)
                     .addOnSuccessListener(barcodes -> {
-                        if (!barcodes.isEmpty()) {
-                            // 识别成功，传递所有类型的码给 View
-                            overlayView.setDetectedBarcodes(barcodes, analysisWidth, analysisHeight);
-                        } else {
-                            overlayView.clearBarcodes();
-                        }
+                        // 修正：切换到主线程更新 UI，防止并发问题或 UI 不刷新
+                        runOnUiThread(() -> {
+                            if (!barcodes.isEmpty()) {
+                                overlayView.setDetectedBarcodes(barcodes, analysisWidth, analysisHeight);
+                            } else {
+                                overlayView.clearBarcodes();
+                            }
+                        });
                     })
                     .addOnFailureListener(e -> Log.e(TAG, "Barcode detection failed", e))
                     .addOnCompleteListener(task -> {
-                        // 必须关闭 ImageProxy，否则画面会卡住
                         imageProxy.close();
                     });
         } else {
