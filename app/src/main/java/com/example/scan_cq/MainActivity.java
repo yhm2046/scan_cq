@@ -2,8 +2,10 @@ package com.example.scan_cq;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.graphics.ImageFormat;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.Size; // 务必保留这行，防止报错
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.*;
@@ -11,61 +13,22 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
 import com.google.mlkit.vision.barcode.Barcode;
 import com.google.mlkit.vision.barcode.BarcodeScanner;
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
+//import com.google.mlkit.vision.barcode.common.Barcode; // 注意：新版ML Kit Barcode常量位置可能变化，如报错请改回 com.google.mlkit.vision.barcode.Barcode
 import com.google.mlkit.vision.common.InputImage;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Date: 2025.12.27 Saturday,14:30
- */
-import android.Manifest;
-import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.util.Log;
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.*;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.view.PreviewView;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import com.google.mlkit.vision.barcode.Barcode;
-import com.google.mlkit.vision.barcode.BarcodeScanner;
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
-import com.google.mlkit.vision.common.InputImage;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-import android.Manifest;
-import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.util.Log;
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.*;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.view.PreviewView;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import com.google.mlkit.vision.barcode.Barcode;
-import com.google.mlkit.vision.barcode.BarcodeScanner;
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
-import com.google.mlkit.vision.common.InputImage;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Date: 25.12.27 Saturday, 14:30-16:31 识别不完整且支付重叠，log有报错
+ * 18：27
  */
+
+
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "QRScanner";
     private static final int PERMISSION_REQUEST_CODE = 100;
@@ -75,7 +38,6 @@ public class MainActivity extends AppCompatActivity {
     private BarcodeScanner barcodeScanner;
     private ExecutorService cameraExecutor;
     private ProcessCameraProvider cameraProvider;
-    private Set<String> detectedBarcodes = new HashSet<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,9 +49,10 @@ public class MainActivity extends AppCompatActivity {
 
         cameraExecutor = Executors.newSingleThreadExecutor();
 
-        // Initialize ML Kit Barcode Scanner
+        // 核心修改 1：支持所有格式 (条形码 + 二维码)
+        // FORMAT_ALL_FORMATS 会同时检测 EAN-13, Code 128, QR Code 等
         BarcodeScannerOptions options = new BarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
                 .build();
         barcodeScanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient(options);
 
@@ -115,19 +78,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bindCameraUseCases() {
+        if (cameraProvider == null) return;
+
         Preview preview = new Preview.Builder().build();
         CameraSelector cameraSelector = new CameraSelector.Builder()
                 .requireLensFacing(CameraSelector.LENS_FACING_BACK)
                 .build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
+        // 核心修改 2：提升分辨率至 1080p
+        // 针对 "12个小二维码" 的场景，1920x1080 是识别密集小码的最佳平衡点
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                .setTargetResolution(new Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build();
 
-        imageAnalysis.setAnalyzer(cameraExecutor, image -> {
-            processImageForQRCode(image);
-            image.close();
+        imageAnalysis.setAnalyzer(cameraExecutor, imageProxy -> {
+            processImageForQRCode(imageProxy);
         });
 
         try {
@@ -138,24 +105,36 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void processImageForQRCode(ImageProxy image) {
-        @androidx.camera.core.ExperimentalGetImage int rotationDegrees = image.getImageInfo().getRotationDegrees();
-        InputImage inputImage = InputImage.fromMediaImage(image.getImage(), rotationDegrees);
+    private void processImageForQRCode(ImageProxy imageProxy) {
+        @androidx.camera.core.ExperimentalGetImage
+        android.media.Image mediaImage = imageProxy.getImage();
 
-        barcodeScanner.process(inputImage)
-                .addOnSuccessListener(barcodes -> {
-                    if (!barcodes.isEmpty()) {
-                        detectedBarcodes.clear();
-                        for (Barcode barcode : barcodes) {
-                            detectedBarcodes.add(barcode.getRawValue());
+        if (mediaImage != null) {
+            InputImage inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.getImageInfo().getRotationDegrees());
+
+            // 获取图像信息用于 Overlay 映射
+            boolean isRotated = imageProxy.getImageInfo().getRotationDegrees() == 90 ||
+                    imageProxy.getImageInfo().getRotationDegrees() == 270;
+            int analysisWidth = isRotated ? imageProxy.getHeight() : imageProxy.getWidth();
+            int analysisHeight = isRotated ? imageProxy.getWidth() : imageProxy.getHeight();
+
+            barcodeScanner.process(inputImage)
+                    .addOnSuccessListener(barcodes -> {
+                        if (!barcodes.isEmpty()) {
+                            // 识别成功，传递所有类型的码给 View
+                            overlayView.setDetectedBarcodes(barcodes, analysisWidth, analysisHeight);
+                        } else {
+                            overlayView.clearBarcodes();
                         }
-                        overlayView.setDetectedBarcodes(barcodes, image.getWidth(), image.getHeight());
-                    } else {
-                        detectedBarcodes.clear();
-                        overlayView.clearBarcodes();
-                    }
-                })
-                .addOnFailureListener(e -> Log.e(TAG, "Barcode detection failed", e));
+                    })
+                    .addOnFailureListener(e -> Log.e(TAG, "Barcode detection failed", e))
+                    .addOnCompleteListener(task -> {
+                        // 必须关闭 ImageProxy，否则画面会卡住
+                        imageProxy.close();
+                    });
+        } else {
+            imageProxy.close();
+        }
     }
 
     @Override
